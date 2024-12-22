@@ -1,0 +1,56 @@
+<!-- HTML file for front-end -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Therapist</title>
+</head>
+<body>
+  <h1>AI Therapist</h1>
+
+  <video id="video" width="640" height="480" autoplay></video>
+  <canvas id="canvas" style="display: none;"></canvas>
+
+  <input type="text" id="message" placeholder="How are you feeling today?">
+  <button id="submit">Submit</button>
+
+  <div id="response"></div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const context = canvas.getContext('2d');
+    const submitButton = document.getElementById('submit');
+    const messageInput = document.getElementById('message');
+    const responseDiv = document.getElementById('response');
+    
+    // Start video stream
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        video.srcObject = stream;
+      });
+    
+    // Handle form submission
+    submitButton.addEventListener('click', async () => {
+      // Take a snapshot from the video feed
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const snapshot = canvas.toDataURL('image/jpeg'); // Get image data as Base64
+    
+      const message = messageInput.value;
+    
+      // Send the message and snapshot to the server
+      const response = await fetch('http://127.0.0.1:5000/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, snapshot })
+      });
+    
+      const data = await response.json();
+      responseDiv.textContent = `Therapist: ${data.response}`;
+    });
+    </script>
+</body>
+</html>
