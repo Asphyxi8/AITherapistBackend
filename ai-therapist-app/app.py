@@ -11,6 +11,7 @@ from torchvision import transforms
 import google.generativeai as palm
 import torch.nn as nn
 import logging
+from werkzeug.security import generate_password_hash, check_password_hash
 logging.basicConfig(level=logging.DEBUG)
 # Number of emotion classes
 num_classes = 7
@@ -74,8 +75,10 @@ class Conversation(db.Model):
 emotion_model = EmotionModel()
 
 # Load the state_dict
-model_path = r"C:\Users\priya\Downloads\emotion_detection_model.pth"
-emotion_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+model_path = r"C:\Users\nandh\OneDrive\Pictures\Desktop\AITherapist\AITherapistBackend\ai-therapist-app\emotion_detection_model.pth"
+emotion_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'), weights_only=True))
+
+
 emotion_model.eval()  # Set the model to evaluation mode
 
 # Define class labels
@@ -99,15 +102,34 @@ preprocess = transforms.Compose([
 # Route to register a user
 @app.route('/register', methods=['POST'])
 def register():
-    data = request.json
-    username = data['username']
-    password = data['password']
-    if User.query.filter_by(username=username).first():
-        return jsonify({"message": "User already exists!"}), 400
-    user = User(username=username, password=password)
-    db.session.add(user)
-    db.session.commit()
-    return jsonify({"message": "User registered successfully!"})
+    if not request.is_json:
+        return jsonify({"message": "Invalid request. JSON data expected."}), 400
+
+    try:
+        data = request.get_json()
+        app.logger.debug(f"Received data: {data}")
+
+        if 'username' not in data or 'password' not in data:
+            return jsonify({"message": "Missing required fields: username and password"}), 400
+
+        username = data['username']
+        password = data['password']
+
+        if User.query.filter_by(username=username).first():
+            return jsonify({"message": "User already exists!"}), 400
+
+        hashed_password = generate_password_hash(password)
+        user = User(username=username, password=hashed_password)
+
+        db.session.add(user)
+        db.session.commit()
+
+        return jsonify({"message": "User registered successfully!"}), 201
+    except Exception as e:
+        app.logger.error(f"Error while registering user: {str(e)}")
+        db.session.rollback()
+        return jsonify({"message": "Internal server error"}), 500
+
 
 # Route to login and generate JWT token
 @app.route('/login', methods=['POST'])
@@ -148,7 +170,9 @@ def new_conversation():
     db.session.add(new_conv)
     db.session.commit()
     return jsonify({"message": "New conversation started!", "conversation_id": new_conv.id})
-
+@app.route("/")
+def home():
+    return "Welcome to AI Therapist App!"
 @app.route('/conversation/<int:conversation_id>', methods=['GET'])
 @jwt_required()
 def get_conversation(conversation_id):
