@@ -16,6 +16,42 @@ logging.basicConfig(level=logging.DEBUG)
 num_classes = 7
 import json
 
+def parse_model_response(response_text):
+    """
+    Parse the model's response, which is expected to return JSON wrapped in ```json ... ```
+    
+    Args:
+        response_text (str): The raw response string from the model.
+    
+    Returns:
+        dict: Parsed JSON object if valid, or a default error response.
+    """
+    try:
+        # Find the starting and ending indices of the JSON block
+        json_start = response_text.find("```json")
+        json_end = response_text.rfind("```")
+        
+        if json_start != -1 and json_end != -1:
+            # Extract the JSON portion, excluding the ```json tags
+            json_content = response_text[json_start + len("```json"):json_end].strip()
+            # Parse the JSON content
+            return json.loads(json_content)
+        else:
+            raise ValueError("JSON block not found in response")
+    
+    except (json.JSONDecodeError, ValueError) as e:
+        # Log error for debugging
+        app.logger.error(f"Failed to parse JSON response: {e}")
+        # Return a default fallback response
+        return {
+            "answer": "I'm sorry, I couldn't process the response. Can we try again?",
+            "therapy": {
+                "name": "N/A",
+                "reason": "Unable to determine due to parsing error.",
+                "description": "N/A"
+            }
+        }
+ 
 # Define the emotion detection model class
 class EmotionModel(nn.Module):
     def __init__(self):
@@ -121,6 +157,7 @@ def login():
         return jsonify({"message": "Login successful!", "access_token": access_token})
     return jsonify({"message": "Invalid credentials!"}), 401
 
+
 @app.route('/conversations', methods=['GET'])
 def get_conversations():
     try:
@@ -133,6 +170,7 @@ def get_conversations():
     user_conversations = Conversation.query.filter_by(user_id=user_id).all()
     app.logger.info(user_conversations)
     return jsonify([{"id": conv.id, "title": conv.title, "messages": conv.messages} for conv in user_conversations])
+
 
 @app.route('/new_conversation', methods=['POST'])
 def new_conversation():
@@ -148,6 +186,7 @@ def new_conversation():
     db.session.add(new_conv)
     db.session.commit()
     return jsonify({"message": "New conversation started!", "conversation_id": new_conv.id})
+
 
 @app.route('/conversation/<int:conversation_id>', methods=['GET'])
 @jwt_required()
@@ -215,35 +254,74 @@ def continue_conversation(conversation_id):
 
     # Initialization prompt for therapist AI
     initialization_prompt = (
-        "You are a therapist AI trained in multiple therapeutic approaches, including Cognitive Behavioral Therapy (CBT), "
-        "Dialectical Behavioral Therapy (DBT), Mindfulness-Based Stress Reduction (MBSR), Acceptance and Commitment Therapy (ACT), "
-        "Person-Centered Therapy, Psychodynamic Therapy, and more. Based on the user's emotional state, apply the appropriate "
-        "technique. For instance, use CBT to challenge negative thoughts, DBT for emotional regulation, mindfulness for stress "
-        "reduction, and ACT for acceptance and behavior change. Ensure responses are empathetic, trauma-informed, and tailored "
-        "to long-term well-being. You are speaking to a user who is feeling {emotion}."
+    "You are a therapist AI trained in multiple therapeutic approaches, including Cognitive Behavioral Therapy (CBT), "
+    "Dialectical Behavioral Therapy (DBT), Mindfulness-Based Stress Reduction (MBSR), Acceptance and Commitment Therapy (ACT), "
+    "Person-Centered Therapy, Psychodynamic Therapy, and more. Based on the user's emotional state, apply the appropriate "
+    "technique. For instance, use CBT to challenge negative thoughts, DBT for emotional regulation, mindfulness for stress "
+    "reduction, and ACT for acceptance and behavior change. Ensure responses are empathetic, trauma-informed, and tailored "
+    "to long-term well-being. You are speaking to a user who is feeling {emotion}."
     ).format(emotion=emotion)
 
-    # Generate the full prompt
-    full_prompt = f"Here is your message history with the user: Initiliaization: {initialization_prompt} {conversation.messages}\n\nUser now said: {message}. Give 1 appropriate response."
-    model = palm.GenerativeModel(model_name='gemini-1.5-flash')
+# Generate the full prompt
+    full_prompt = (
+    f"Here is your message history with the user: Initialization: {initialization_prompt} {conversation.messages}\n\n"
+    f"User now said: {message}.\n"
+    f"Respond with a JSON object in the following format:\n\n"
+    f"{{\n"
+    f"  \"answer\": \"<Provide a thoughtful, empathetic response to the user's message here>\",\n"
+    f"  \"therapy\": {{\n"
+    f"    \"name\": \"<The name of the therapeutic approach used>\",\n"
+    f"    \"reason\": \"<Explain why this technique was chosen based on the user's input>\",\n"
+    f"    \"description\": \"<Provide a brief description of what this technique entails>\"\n"
+    f"  }}\n"
+    f"}}\n\n"
+    f"Example:\n"
+    f"{{\n"
+    f"  \"answer\": \"Hey there. It sounds like you're looking to connect. How are you doing today?\",\n"
+    f"  \"therapy\": {{\n"
+    f"    \"name\": \"Person-Centered Therapy\",\n"
+    f"    \"reason\": \"The user's initial greeting is neutral, indicating neither distress nor significant positive emotion. "
+    f"Person-centered therapy's focus on empathy, unconditional positive regard, and genuineness provides a safe and non-judgmental "
+    f"space for the user to open up at their own pace. This approach avoids imposing specific techniques prematurely and allows for "
+    f"a natural unfolding of the therapeutic conversation.\",\n"
+    f"    \"description\": \"Person-centered therapy emphasizes the inherent capacity for self-actualization within each individual. "
+    f"The therapist provides a supportive and accepting environment, fostering the client's self-exploration and growth. "
+    f"Key elements include empathy, unconditional positive regard, and congruence (genuineness) from the therapist.\"\n"
+    f"  }}\n"
+    f"}}\n\n"
+    f"Ensure your response strictly follows this format and contains no additional text outside the JSON."
+    )
 
-    # Generate a response from PaLM API using the generate_text method
+    model = palm.GenerativeModel(model_name='gemini-1.5-flash')
     response = model.generate_content(full_prompt)
 
+    # Parse the JSON response
+    parsed_response = parse_model_response(response.text)
+
+    # Update the conversation data
     try:
         conversation_data = json.loads(conversation.messages)
     except (json.JSONDecodeError, TypeError):
-        # If messages is empty or invalid JSON, initialize as empty list
+        # If messages are empty or invalid JSON, initialize as an empty list
         conversation_data = []
         app.logger.info("Initializing empty conversation data")
-        # Append new messages
+
+    # Append new messages
     conversation_data.append({"role": "user", "message": message, "emotion": emotion})
-    conversation_data.append({"role": "ai", "message": response.text})            # Convert back to JSON string and save
+    conversation_data.append({
+        "role": "ai",
+        "answer": parsed_response.get("answer", ""),
+        "therapy": parsed_response.get("therapy", {})
+    })
+
+    # Convert updated conversation data back to JSON string and save
     conversation.messages = json.dumps(conversation_data)
     db.session.commit()
 
     # Send back the updated conversation
-    return jsonify({"response": response.text, "updated_messages": conversation_data})
+    return jsonify({"response": parsed_response.get("answer", ""), "updated_messages": conversation_data})
+
+
 
 if __name__ == '__main__':
     with app.app_context():  # Ensure we're inside the app context
