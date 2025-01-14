@@ -2329,10 +2329,9 @@ def recommend_tests():
     te_ary = te.fit(transactions).transform(transactions)
     df = pd.DataFrame(te_ary, columns=te.columns_)
 
-
     frequent_itemsets = apriori(df, min_support=0.1, use_colnames=True)
     num_itemsets = len(frequent_itemsets)
-    rules = association_rules(frequent_itemsets, num_itemsets=num_itemsets, metric="confidence", min_threshold=0.5)
+    rules = association_rules(frequent_itemsets, num_itemsets=num_itemsets, metric="confidence", min_threshold=0.3)
     recommendations = set()
     for _, rule in rules.iterrows():
         antecedents = set(rule['antecedents'])
@@ -2344,11 +2343,11 @@ def recommend_tests():
 
     # Fetch names of recommended tests
     recommended_tests = (
-        db.session.query(Test.id, Test.name)
+        db.session.query(Test.id, Test.name, Test.description)
         .filter(Test.id.in_(recommendations))
         .all()
     )
-    response = [{"test_id": test_id, "test_name": test_name} for test_id, test_name in recommended_tests]
+    response = [{"test_id": test_id, "test_name": test_name, "test_description": test_description} for test_id, test_name, test_description in recommended_tests]
     app.logger.info(f"Recommendations for user {user_id}: {response}")
 
     return jsonify({"recommendations": response})
