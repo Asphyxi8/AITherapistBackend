@@ -12,9 +12,14 @@ import google.generativeai as palm
 import torch.nn as nn
 import logging
 logging.basicConfig(level=logging.DEBUG)
-# Number of emotion classes
+from sqlalchemy.sql import func
+from mlxtend.frequent_patterns import apriori, association_rules
+from mlxtend.preprocessing import TransactionEncoder
+import pandas as pd
+
 num_classes = 7
 import json
+
 
 def parse_model_response(response_text):
     """
@@ -115,23 +120,20 @@ class Test(db.Model):
         return self.format.get("scoring_rule", "sum")  # Default is summation
 
 
-# Define UserTest model (to track test scores for users)
 class UserTest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     test_id = db.Column(db.Integer, db.ForeignKey('test.id'), nullable=False)
     score = db.Column(db.Integer, default=-1)
+    updated_at = db.Column(db.DateTime, nullable=False, default=func.now(), onupdate=func.now())  # Updates on change
     user = db.relationship('User', backref=db.backref('user_tests', lazy=True))
     test = db.relationship('Test', backref=db.backref('user_tests', lazy=True))
-
 
 @app.route('/api/test/<int:test_id>', methods=['GET'])
 @jwt_required()
 def get_test(test_id):
     # Fetch test by ID
-    app.logger.info("HELLO")
     test = Test.query.get_or_404(test_id)
-    app.logger.info(test)
     # You can return the test format and other details
     return jsonify({
         "id": test.id,
@@ -254,7 +256,6 @@ def get_conversations():
         return jsonify({"message": "Invalid token"}), 401
 
     user_conversations = Conversation.query.filter_by(user_id=user_id).all()
-    app.logger.info(user_conversations)
     return jsonify([{"id": conv.id, "title": conv.title, "messages": conv.messages} for conv in user_conversations])
 
 
@@ -338,6 +339,16 @@ def continue_conversation(conversation_id):
         emotion_index = torch.argmax(probabilities, dim=1).item()
         emotion = emotion_labels[emotion_index]
 
+    user_tests = UserTest.query.filter_by(user_id=user_id).all()
+    
+    results = [
+        {
+            "name": user_test.test.name,
+            "score": user_test.score,
+            "date": user_test.updated_at.strftime("%Y-%m-%d")
+        } 
+        for user_test in user_tests
+    ]
     # Initialization prompt for therapist AI
     initialization_prompt = (
     "You are a therapist AI trained in multiple therapeutic approaches, including Cognitive Behavioral Therapy (CBT), "
@@ -345,8 +356,8 @@ def continue_conversation(conversation_id):
     "Person-Centered Therapy, Psychodynamic Therapy, and more. Based on the user's emotional state, apply the appropriate "
     "technique. For instance, use CBT to challenge negative thoughts, DBT for emotional regulation, mindfulness for stress "
     "reduction, and ACT for acceptance and behavior change. Ensure responses are empathetic, trauma-informed, and tailored "
-    "to long-term well-being. You are speaking to a user who is feeling {emotion}."
-    ).format(emotion=emotion)
+    "to long-term well-being. The user has taken the following tests: {results}. You are speaking to a user who is feeling {emotion}."
+    ).format(emotion=emotion, results = results)
 
 # Generate the full prompt
     full_prompt = (
@@ -1053,8 +1064,1230 @@ def seed_add_tests():
         ],
         "scoring_rule": "sum"
     }
-}
-    ]
+},
+{
+    "name": "The Camouflaging Autistic Traits Questionnaire [CAT-Q]",
+    "description": (
+        '''The CAT-Q is a sub-test designed to measure the degree to which you use camouflaging strategies in social interactions, particularly in the context of autism. Camouflaging refers to the suppression of autistic traits to adapt to social norms, which can be both conscious and unconscious. The more you camouflage, the more of your autistic traits you may suppress. A high camouflaging score may also explain why you don’t meet diagnostic criteria for autism, yet still experience autistic traits. This tool helps to identify the extent of camouflaging you engage in, which could be masking underlying autistic behaviors.
+
+Users can also manually calculate subtraits with this:
+
+Self-scoring:  
+If auto-scoring isn’t working, or if you prefer to self-score your answers, follow the steps below.
+
+CAT-Q total score:  
+Reverse the scores of the answers for statements 3, 12, 19, 22, and 24.  
+Original scoring: a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7  
+Reverse scoring: a = 7, b = 6, c = 5, d = 4, e = 3, f = 2, g = 1  
+Then, add up all answers for statements 1–25.
+
+Compensation score:  
+Add up all answers for statements 1, 4, 5, 8, 11, 14, 17, 20, and 23.
+
+Masking score:  
+Add up all answers for statements 2, 6, 9, 12, 15, 18, 21, and 24.  
+Use the reversed scoring for statements 12 and 24.
+
+Assimilation score:  
+Add up all answers for statements 3, 7, 10, 13, 16, 19, 22, and 25.  
+Use the reversed scoring for statements 3, 19, and 22.
+
+Average scores:  
+A total score of 100 or above indicates you camouflage autistic traits, meaning you suppress certain behaviors to fit into social contexts.
+'''
+    ),
+    "format": {
+        "questions": [
+            {
+                "text": "When I am interacting with someone, I deliberately copy their body language or facial expressions.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I monitor my body language or facial expressions so that I appear relaxed.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I rarely feel the need to put on an act in order to get through a social situation.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 6},
+                    {"text": "Disagree", "score": 5},
+                    {"text": "Somewhat Disagree", "score": 4},
+                    {"text": "Neither Agree nor Disagree", "score": 3},
+                    {"text": "Somewhat Agree", "score": 2},
+                    {"text": "Agree", "score": 1}
+                ]
+            },
+            {
+                "text": "I have developed a script to follow in social situations.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I will repeat phrases that I have heard others say in the exact same way that I first heard them.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I adjust my body language or facial expressions so that I appear interested by the person I am interacting with.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "In social situations, I feel like I’m ‘performing’ rather than being myself.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "In my own social interactions, I use behaviours that I have learned from watching other people interacting.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I always think about the impression I make on other people.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I need the support of other people in order to socialise.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I practice my facial expressions and body language to make sure they look natural.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I don’t feel the need to make eye contact with other people if I don’t want to.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 6},
+                    {"text": "Disagree", "score": 5},
+                    {"text": "Somewhat Disagree", "score": 4},
+                    {"text": "Neither Agree nor Disagree", "score": 3},
+                    {"text": "Somewhat Agree", "score": 2},
+                    {"text": "Agree", "score": 1}
+                ]
+            },
+            {
+                "text": "I have to force myself to interact with people when I am in social situations.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I have tried to improve my understanding of social skills by watching other people.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I monitor my body language or facial expressions so that I appear interested by the person I am interacting with.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "When in social situations, I try to find ways to avoid interacting with others.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I have researched the rules of social interactions to improve my own social skills.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I am always aware of the impression I make on other people.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I feel free to be myself when I am with other people.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 6},
+                    {"text": "Disagree", "score": 5},
+                    {"text": "Somewhat Disagree", "score": 4},
+                    {"text": "Neither Agree nor Disagree", "score": 3},
+                    {"text": "Somewhat Agree", "score": 2},
+                    {"text": "Agree", "score": 1}
+                ]
+            },
+            {
+                "text": "I learn how people use their bodies and faces to interact by watching television or films, or by reading fiction.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "I adjust my body language or facial expressions so that I appear relaxed.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "When talking to other people, I feel like the conversation flows naturally.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 6},
+                    {"text": "Disagree", "score": 5},
+                    {"text": "Somewhat Disagree", "score": 4},
+                    {"text": "Neither Agree nor Disagree", "score": 3},
+                    {"text": "Somewhat Agree", "score": 2},
+                    {"text": "Agree", "score": 1}
+                ]
+            },
+            {
+                "text": "I have spent time learning social skills from television shows and films, and try to use these in my interactions.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            },
+            {
+                "text": "In social interactions, I do not pay attention to what my face or body are doing.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 6},
+                    {"text": "Disagree", "score": 5},
+                    {"text": "Somewhat Disagree", "score": 4},
+                    {"text": "Neither Agree nor Disagree", "score": 3},
+                    {"text": "Somewhat Agree", "score": 2},
+                    {"text": "Agree", "score": 1}
+                ]
+            },
+            {
+                "text": "In social situations, I feel like I am pretending to be ‘normal’.",
+                "options": [
+                    {"text": "Strongly Disagree", "score": 1},
+                    {"text": "Disagree", "score": 2},
+                    {"text": "Somewhat Disagree", "score": 3},
+                    {"text": "Neither Agree nor Disagree", "score": 4},
+                    {"text": "Somewhat Agree", "score": 5},
+                    {"text": "Agree", "score": 6}
+                ]
+            }
+        ],
+        "scoring_rule": "sum",
+    }
+},
+{
+            "name": "[Drug Addiction] The Leeds Dependance",
+            "description": (
+                "A concise self-assessment questionnaire consisting of 10 items, designed to evaluate the severity of dependence on any drug, including alcohol. "
+                "Respondents are asked to reflect on the past week and focus on their primary substance(s) of use, specifying the substance(s) when applicable."
+                "Each question offers four response options: Never (0), Sometimes (1), Often (2), and Nearly Always (3), allowing individuals to select the most appropriate answer."
+            ),
+            "format": {
+                "questions": [
+                      {
+                          "text": "Do you find yourself thinking about when you will next be able to have another drink or take drugs?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Is drinking or taking drugs more important than anything else you might do during the day?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you feel your need for drink or drugs is too strong to control?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you plan your days around getting and taking drink or drugs?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you drink or take drugs in a particular way in order to increase the effect it gives you?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you drink or take drugs morning, afternoon and evening?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you feel you have to carry on drinking or taking drugs once you have started?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Is getting the effect you want more important than the particular drink or drug you use?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you want to take more drink or drugs when the effect starts to wear off?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      },
+                      {
+                          "text": "Do you find it difficult to cope with life without drink or drugs?",
+                          "options": [
+                              {"text": "Never", "score": 0},
+                              {"text": "Sometimes", "score": 1},
+                              {"text": "Often", "score": 2},
+                              {"text": "Nearly always", "score": 3}
+                          ]
+                      }
+                ],
+                "scoring_rule": "sum",
+            }
+},
+{
+            "name": "Brief Fear of Negative Evaluation Scale",
+            "description": (
+                "The Brief Fear of Negative Evaluation Scale (Leary, 1983) is a self-assessment tool designed to measure an individual's concern about being negatively evaluated by others."
+                "Participants are presented with a series of statements and asked to rate how characteristic each statement is of them using the following scale: 1: Not at all characteristic of me, 2: Slightly characteristic of me, 3: Moderately characteristic of me, 4: Very characteristic of me, 5: Extremely characteristic of me"
+                "The scale provides insights into the participant's levels of social anxiety and fear of judgment, aiding in the evaluation of their emotional and interpersonal dynamics."
+            ),
+            "format": {
+                "questions": [
+                  {
+                      "text": "I worry about what other people will think of me even when I know it doesn't make any difference.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I am unconcerned even if I know people are forming an unfavorable impression of me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I am frequently afraid of other people noticing my shortcomings.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I rarely worry about what kind of impression I am making on someone.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I am afraid others will not approve of me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I am afraid that people will find fault with me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "Other people's opinions of me do not bother me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "When I am talking to someone, I worry about what they may be thinking about me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I am usually worried about what kind of impression I make.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "If I know someone is judging me, it has little effect on me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "Sometimes I think I am too concerned with what other people think of me.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  },
+                  {
+                      "text": "I often worry that I will say or do the wrong things.",
+                      "options": [
+                          {"text": "Not at all characteristic of me", "score": 1},
+                          {"text": "Slightly characteristic of me", "score": 2},
+                          {"text": "Moderately characteristic of me", "score": 3},
+                          {"text": "Very characteristic of me", "score": 4},
+                          {"text": "Extremely characteristic of me", "score": 5}
+                      ]
+                  }
+                ],
+                "scoring_rule": "sum",
+            }
+        },
+        {
+    "name": "[Depression] CUDOS Scale",
+    "description": (
+        "The CUDOS Depression Scale is a self-assessment tool designed to measure symptoms of depression. "
+        "Participants are presented with a series of statements and asked to rate how well each statement describes their experiences "
+        "during the past week, including today, using the following scale: "
+        "0 = Not at all true (0 days), 1 = Rarely true (1-2 days), 2 = Sometimes true (3-4 days), "
+        "3 = Often true (5-6 days), 4 = Almost always true (every day). "
+        "This scale provides insights into the participant's mood, behavior, and emotional state, aiding in the evaluation of depressive symptoms."
+    ),
+    "format": {
+        "questions": [
+            {
+                "text": "I felt sad or depressed.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I was not as interested in my usual activities.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "My appetite was poor and I didn't feel like eating.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "My appetite was much greater than usual.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I had difficulty sleeping.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I was sleeping too much.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I felt very fidgety, making it difficult to sit still.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I felt physically slowed down, like my body was stuck in mud.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "My energy level was low.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I felt guilty.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I thought I was a failure.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I had problems concentrating.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I had more difficulties making decisions than usual.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I thought about killing myself.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": ". I wished I was dead.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+            {
+                "text": "I thought that the future looked hopeless.",
+                "options": [
+                    {"text": "Not at all true (0 days)", "score": 0},
+                    {"text": "Rarely true (1-2 days)", "score": 1},
+                    {"text": "Sometimes true (3-4 days)", "score": 2},
+                    {"text": "Often true (5-6 days)", "score": 3},
+                    {"text": "Almost always true (every day)", "score": 4}
+                ]
+            },
+        ],
+        "scoring_rule": "sum"
+    }
+},
+{
+    "name": "[Suicidal Ideation] Interpersonal Needs Questionnaire (INQ)",
+    "description": (
+        "The Interpersonal Needs Questionnaire (INQ) is a self-assessment tool designed to measure two core constructs "
+        "related to suicidal ideation: thwarted belongingness and perceived burdensomeness. Participants are asked to "
+        "rate how true each statement is based on how they have been feeling recently, using a 7-point scale ranging from "
+        "1 = Not at all true for me to 7 = Very true for me. Reverse coding is applied to items 7, 8, 10, 13, 14, and 15."
+    ),
+    "format": {
+        "questions": [
+            {
+                "text": "These days, the people in my life would be better off if I were gone.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, the people in my life would be happier without me.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I think I am a burden on society.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I think my death would be a relief to the people in my life.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I think the people in my life wish they could be rid of me.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I think I make things worse for the people in my life.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, other people care about me.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 7},
+                    {"text": "A little true for me", "score": 6},
+                    {"text": "Somewhat true for me", "score": 5},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 3},
+                    {"text": "Mostly true for me", "score": 2},
+                    {"text": "Very true for me", "score": 1}
+                ]
+            },
+            {
+                "text": "These days, I feel like I belong.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 7},
+                    {"text": "A little true for me", "score": 6},
+                    {"text": "Somewhat true for me", "score": 5},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 3},
+                    {"text": "Mostly true for me", "score": 2},
+                    {"text": "Very true for me", "score": 1}
+                ]
+            },
+            {
+                "text": "These days, I rarely interact with people who care about me.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I am fortunate to have many caring and supportive friends.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 7},
+                    {"text": "A little true for me", "score": 6},
+                    {"text": "Somewhat true for me", "score": 5},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 3},
+                    {"text": "Mostly true for me", "score": 2},
+                    {"text": "Very true for me", "score": 1}
+                ]
+            },
+            {
+                "text": "These days, I feel disconnected from other people.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I often feel like an outsider in social gatherings.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 1},
+                    {"text": "A little true for me", "score": 2},
+                    {"text": "Somewhat true for me", "score": 3},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 5},
+                    {"text": "Mostly true for me", "score": 6},
+                    {"text": "Very true for me", "score": 7}
+                ]
+            },
+            {
+                "text": "These days, I feel that there are people I can turn to in times of need.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 7},
+                    {"text": "A little true for me", "score": 6},
+                    {"text": "Somewhat true for me", "score": 5},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 3},
+                    {"text": "Mostly true for me", "score": 2},
+                    {"text": "Very true for me", "score": 1}
+                ]
+            },
+            {
+                "text": "These days, I am close to other people.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 7},
+                    {"text": "A little true for me", "score": 6},
+                    {"text": "Somewhat true for me", "score": 5},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 3},
+                    {"text": "Mostly true for me", "score": 2},
+                    {"text": "Very true for me", "score": 1}
+                ]
+            },
+            {
+                "text": "These days, I have at least one satisfying interaction every day.",
+                "options": [
+                    {"text": "Not at all true for me", "score": 7},
+                    {"text": "A little true for me", "score": 6},
+                    {"text": "Somewhat true for me", "score": 5},
+                    {"text": "Moderately true for me", "score": 4},
+                    {"text": "Fairly true for me", "score": 3},
+                    {"text": "Mostly true for me", "score": 2},
+                    {"text": "Very true for me", "score": 1}
+                ]
+            }
+        ],
+        "scoring_rule": "sum"
+    }
+},
+{
+            "name": "Buss & Perry Aggression",
+            "description": (
+                "The Aggression Questionnaire (Buss & Perry, 1992) is a self-assessment tool designed to evaluate levels of aggression across various dimensions. "
+                "Participants rate how well each statement describes them using a 5-point scale: 1 (extremely uncharacteristic of me), 2 (somewhat uncharacteristic of me), 3 (neither uncharacteristic nor characteristic of me), 4 (somewhat characteristic of me), and 5 (extremely characteristic of me)."
+                "Ratings are recorded next to each statement to reflect the respondent's self-perception."
+            ),
+            "format": {
+                "questions": [
+                        {
+                            "text": "Some of my friends think I am a hothead.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "If I have to resort to violence to protect my rights, I will.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "When people are especially nice to me, I wonder what they want.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I tell my friends openly when I disagree with them.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I have become so mad that I have broken things.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I can’t help getting into arguments when people disagree with me.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I wonder why sometimes I feel so bitter about things.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "Once in a while, I can’t control the urge to strike another person.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I am an even-tempered person.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 5},
+                                {"text": "Somewhat uncharacteristic of me", "score": 4},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 2},
+                                {"text": "Extremely characteristic of me", "score": 1}
+                            ]
+                        },
+                        {
+                            "text": "I am suspicious of overly friendly strangers.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I have threatened people I know.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I flare up quickly but get over it quickly.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "Given enough provocation, I may hit another person.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "When people annoy me, I may tell them what I think of them.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I am sometimes eaten up with jealousy.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I can think of no good reason for ever hitting a person.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 5},
+                                {"text": "Somewhat uncharacteristic of me", "score": 4},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 2},
+                                {"text": "Extremely characteristic of me", "score": 1}
+                            ]
+                        },
+                        {
+                            "text": "At times I feel I have gotten a raw deal out of life.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I have trouble controlling my temper.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "When frustrated, I let my irritation show.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I sometimes feel that people are laughing at me behind my back.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I often find myself disagreeing with people.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "If somebody hits me, I hit back.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I sometimes feel like a powder keg ready to explode.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "Other people always seem to get the breaks.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "There are people who pushed me so far that we came to blows.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I know that “friends” talk about me behind my back.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "My friends say that I’m somewhat argumentative.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "Sometimes I fly off the handle for no good reason.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        },
+                        {
+                            "text": "I get into fights a little more than the average person.",
+                            "options": [
+                                {"text": "Extremely uncharacteristic of me", "score": 1},
+                                {"text": "Somewhat uncharacteristic of me", "score": 2},
+                                {"text": "Neither uncharacteristic nor characteristic of me", "score": 3},
+                                {"text": "Somewhat characteristic of me", "score": 4},
+                                {"text": "Extremely characteristic of me", "score": 5}
+                            ]
+                        }
+
+                ],
+                "scoring_rule": "sum",
+            }
+        }
+]
 
     for test in tests:
         existing_test = Test.query.filter_by(name=test["name"]).first()
@@ -1069,6 +2302,56 @@ def seed_add_tests():
     db.session.commit()
     print("All tests have been seeded.")
 
+@app.route('/recommend', methods=['GET'])
+@jwt_required() 
+def recommend_tests():
+    user_id = get_jwt_identity()  
+    if not user_id:
+        return jsonify({"error": "User authentication failed"}), 401
+
+    # Fetch all tests taken by the user
+    user_tests = db.session.query(UserTest.test_id).filter(UserTest.user_id == user_id).all()
+    user_taken_tests = {test_id for (test_id,) in user_tests}
+
+    # Fetch all user-test data
+    all_user_tests = db.session.query(UserTest.user_id, UserTest.test_id).all()
+
+    # Transform data into transactions
+    transactions = {}
+    for user, test_id in all_user_tests:
+        if user not in transactions:
+            transactions[user] = []
+        transactions[user].append(test_id)
+    transactions = list(transactions.values())
+
+    # Use TransactionEncoder to transform for Apriori
+    te = TransactionEncoder()
+    te_ary = te.fit(transactions).transform(transactions)
+    df = pd.DataFrame(te_ary, columns=te.columns_)
+
+
+    frequent_itemsets = apriori(df, min_support=0.1, use_colnames=True)
+    num_itemsets = len(frequent_itemsets)
+    rules = association_rules(frequent_itemsets, num_itemsets=num_itemsets, metric="confidence", min_threshold=0.5)
+    recommendations = set()
+    for _, rule in rules.iterrows():
+        antecedents = set(rule['antecedents'])
+        consequents = set(rule['consequents'])
+
+        # Recommend tests the user hasn't taken
+        if antecedents.issubset(user_taken_tests) and not consequents.intersection(user_taken_tests):
+            recommendations.update(consequents - user_taken_tests)
+
+    # Fetch names of recommended tests
+    recommended_tests = (
+        db.session.query(Test.id, Test.name)
+        .filter(Test.id.in_(recommendations))
+        .all()
+    )
+    response = [{"test_id": test_id, "test_name": test_name} for test_id, test_name in recommended_tests]
+    app.logger.info(f"Recommendations for user {user_id}: {response}")
+
+    return jsonify({"recommendations": response})
 
 @app.route('/api/my-tests', methods=['GET'])
 @jwt_required()  # Ensure the user is authenticated
